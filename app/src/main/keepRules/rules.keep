@@ -1,0 +1,55 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+##---------------------------------------------------------------------------
+## Gson — all serialization is reflective, so model shape must survive R8.
+##---------------------------------------------------------------------------
+# Every request/response model in the app, plus enums used as payload values.
+-keep class com.example.aaharin.data.** { *; }
+-keepclassmembers enum com.example.aaharin.data.** {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# Fields annotated with @SerializedName must keep their names everywhere.
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
+-keepattributes AnnotationDefault
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# Gson's own reflective machinery.
+-dontwarn sun.misc.**
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
+
+##---------------------------------------------------------------------------
+## Retrofit
+##---------------------------------------------------------------------------
+# Retrofit reads generic return types + parameter annotations off the interface.
+-keep,allowobfuscation,allowshrinking interface com.example.aaharin.network.ApiService
+-keep,allowobfuscation,allowshrinking class retrofit2.Response
+-keep,allowobfuscation,allowshrinking class kotlin.coroutines.Continuation
+-if interface * { @retrofit2.http.* public *** *(...); }
+-keep,allowoptimization,allowshrinking,allowobfuscation class <3>
+-dontwarn retrofit2.**
+-dontwarn javax.annotation.**
+
+##---------------------------------------------------------------------------
+## OkHttp / Okio
+##---------------------------------------------------------------------------
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+##---------------------------------------------------------------------------
+## Kotlin
+##---------------------------------------------------------------------------
+-keepclassmembers class kotlin.Metadata { public <methods>; }
+-dontwarn kotlin.Unit

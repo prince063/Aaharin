@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The app's palette lives in ui/theme/Color.kt and is driven by Material 3.
+      The default AS template colours that used to sit here were unreferenced.
+    -->
+</resources>
