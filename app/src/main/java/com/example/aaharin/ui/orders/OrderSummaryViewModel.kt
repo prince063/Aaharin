@@ -199,8 +199,10 @@ class OrderSummaryViewModel : ViewModel() {
                 val response = NetworkModule.apiService.generateBill(
                     accessToken = accessToken,
                     request = GenerateBillRequest(
+                        // item_ids only - the controller needs it to resolve the menu, but
+                        // itemIdQtyArr is left empty so nothing is re-inserted. See the
+                        // field's comment: passing the order's lines here duplicated them.
                         itemIds = itemQuantities.keys.joinToString(","),
-                        itemIdQtyMap = itemQuantities.mapKeys { it.key.toString() },
                         orderTableId = orderTableId,
                         kotNumber = kotNumber,
                         tableId = tableId,

@@ -216,7 +216,14 @@ data class OrderItemsRequest(
  */
 data class GenerateBillRequest(
     @SerializedName("item_ids") val itemIds: String,
-    @SerializedName("itemIdQtyArr") val itemIdQtyMap: Map<String, Int>,
+    /**
+     * MUST stay empty when billing. Every entry here is INSERTED as a new order item
+     * (Utility.php:1700), so sending the order's existing lines duplicates all of them -
+     * doubling the quantities and the bill. The billing branch recomputes the total from
+     * the rows already saved against the order, so nothing is needed here. Only genuinely
+     * new items added at billing time would belong in this map.
+     */
+    @SerializedName("itemIdQtyArr") val itemIdQtyMap: Map<String, Int> = emptyMap(),
     @SerializedName("order_table_id") val orderTableId: Int,
     @SerializedName("kot_number") val kotNumber: Int = 1,
     @SerializedName("table_id") val tableId: Int,
