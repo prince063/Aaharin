@@ -1,10 +1,5 @@
 package com.example.aaharin.ui.orders
 
-import android.app.DownloadManager
-import android.content.Context
-import android.content.Intent
-import android.os.Environment
-import androidx.core.net.toUri
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
@@ -122,92 +117,105 @@ class OrderSummaryViewModel : ViewModel() {
         }
     }
 
-    fun printBillWithDetails(
-        context: Context,
+    /**
+     * Bills the order through `item-list-data`, the same call the web POS makes.
+     *
+     * This both completes the order and writes the vaidi_order_billing record, so the
+     * table frees up and the amount is left outstanding. Nothing is collected here -
+     * settlement is a separate step.
+     *
+     * Needs the line items ([itemQuantities]) and [orderTableId] from the table list;
+     * without them the server has nothing to bill and would silently open a new order.
+     */
+    fun generateBill(
         accessToken: String,
         restaurantId: Int,
-        orderId: Any?,
-        tableId: Int = 0,
+        userId: Int,
+        tableId: Int,
+        orderTableId: Int,
+        kotNumber: Int,
+        itemQuantities: Map<Int, Int>,
+        cgst: Double,
+        sgst: Double,
+        igst: Double,
         custName: String = "",
         custMobile: String = "",
-        custEmail: String = "",
         custGst: String = "",
         custAddress: String = "",
         discount: Double = 0.0,
         paymentType: String = "",
-        onSuccess: (String?) -> Unit
+        onSuccess: () -> Unit
     ) {
+        if (orderTableId <= 0 || itemQuantities.isEmpty()) {
+            errorMessage = "No running order found for this table - reopen it and try again"
+            return
+        }
+
         isLoading = true
         errorMessage = null
 
-        // Was three copies of the same hardcoded dev URL; now derived from the
-        // configured base URL so switching to PROD_BASE_URL carries it along.
-        val fallbackUrl = sampleBillUrl(restaurantId)
-
         viewModelScope.launch {
             try {
-                val response = NetworkModule.apiService.printBillForm(
+                val response = NetworkModule.apiService.generateBill(
                     accessToken = accessToken,
-                    tableId = tableId,
-                    discount = discount,
-                    paymentType = paymentType,
-                    custName = custName,
-                    custMobile = custMobile,
-                    custEmail = custEmail,
-                    custGst = custGst,
-                    custAddress = custAddress
+                    request = GenerateBillRequest(
+                        itemIds = itemQuantities.keys.joinToString(","),
+                        itemIdQtyMap = itemQuantities.mapKeys { it.key.toString() },
+                        orderTableId = orderTableId,
+                        kotNumber = kotNumber,
+                        tableId = tableId,
+                        restaurantId = restaurantId,
+                        userId = userId,
+                        cgst = cgst,
+                        sgst = sgst,
+                        igst = igst,
+                        discount = discount,
+                        paymentType = paymentType,
+                        customerName = custName,
+                        customerMobile = custMobile,
+                        customerGst = custGst,
+                        customerAddress = custAddress
+                    )
                 )
 
-                val pdfUrl = if (response.isSuccessful) {
-                    response.body()?.pdfUrl ?: fallbackUrl
-                } else {
-                    fallbackUrl
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "generate-bill HTTP ${response.code()}")
+                    errorMessage = "Billing failed (server error ${response.code()})"
+                    return@launch
                 }
 
-                if (pdfUrl.startsWith("http")) {
-                    downloadPdf(context, pdfUrl)
+                val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
+                // HTTP 200 comes back for failures too; only the body's code is real.
+                val code = body?.get("code")?.asString?.toIntOrNull()
+                if (code != 200) {
+                    errorMessage = body?.get("error_message")?.asString
+                        ?: "Billing failed (code ${code ?: "?"})"
+                    return@launch
                 }
-                onSuccess(pdfUrl)
+
+                // The server refuses to issue a second invoice for an order that already
+                // has one, and says so with this flag rather than an error.
+                val tableDataObj = body.get("data")
+                    ?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get("tableData")?.takeIf { it.isJsonObject }?.asJsonObject
+                val alreadyPlaced = tableDataObj?.get("order_already_placed")
+                    ?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull() ?: 0
+
+                if (alreadyPlaced == 1) {
+                    errorMessage = "This order has already been billed"
+                    return@launch
+                }
+
+                // Order is closed and billed, so the table is free for the next cover.
+                if (tableId != 0) {
+                    DummyData.clearLocalOccupancy(tableId)
+                }
+                onSuccess()
             } catch (e: Exception) {
-                Log.w(TAG, "print-bill failed, falling back to sample bill", e)
-                downloadPdf(context, fallbackUrl)
-                onSuccess(fallbackUrl)
+                Log.w(TAG, "generate-bill request failed", e)
+                errorMessage = "Billing failed: check the connection and try again"
             } finally {
                 isLoading = false
-            }
-        }
-    }
-
-    private fun sampleBillUrl(restaurantId: Int): String {
-        val id = if (restaurantId > 0) restaurantId else 1
-        return "${NetworkModule.SERVER_ROOT}/prints/$id/bills/sample_bill.pdf"
-    }
-
-    private fun downloadPdf(context: Context, pdfUrl: String) {
-        try {
-            val request = DownloadManager.Request(pdfUrl.toUri()).apply {
-                setTitle("Downloading Bill PDF")
-                setDescription("Downloading bill from Aaharin POS")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    "Bill_${System.currentTimeMillis()}.pdf"
-                )
-            }
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            downloadManager.enqueue(request)
-        } catch (e: Exception) {
-            // DownloadManager unavailable/disabled — hand the URL to the browser instead.
-            Log.w(TAG, "DownloadManager unavailable, opening bill externally", e)
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, pdfUrl.toUri()).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                context.startActivity(intent)
-            } catch (e2: Exception) {
-                // No activity can handle a PDF — surface it instead of crashing the app.
-                Log.e(TAG, "No handler for bill URL $pdfUrl", e2)
-                errorMessage = "Could not open the bill PDF"
             }
         }
     }

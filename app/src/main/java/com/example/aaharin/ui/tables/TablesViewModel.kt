@@ -50,11 +50,39 @@ class TablesViewModel : ViewModel() {
                         val tableData = apiResponse.data.tableData
                         val cartData = apiResponse.data.cartData
 
-                        // Extract IDs from cartData keys to identify occupied tables
+                        // Extract IDs from cartData keys to identify occupied tables.
+                        //
+                        // Each entry also holds the running order itself: its numeric id,
+                        // kot number, and an item_id -> quantity pair per line. This is the
+                        // only place the app can get them - tableData carries none of it and
+                        // the server exposes no order-details route - and billing needs all
+                        // three.
                         val occupiedTableIds = mutableSetOf<Int>()
+                        val orderTableIds = mutableMapOf<Int, Int>()
+                        val kotNumbers = mutableMapOf<Int, Int>()
+                        val itemQuantities = mutableMapOf<Int, Map<Int, Int>>()
                         if (cartData != null && cartData.isJsonObject) {
-                            cartData.asJsonObject.keySet().forEach { key ->
-                                key.toIntOrNull()?.let { occupiedTableIds.add(it) }
+                            cartData.asJsonObject.entrySet().forEach { (key, value) ->
+                                val tId = key.toIntOrNull() ?: return@forEach
+                                occupiedTableIds.add(tId)
+
+                                val cart = value.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+                                cart.get("order_table_id")?.takeIf { it.isJsonPrimitive }
+                                    ?.asString?.toIntOrNull()?.let { orderTableIds[tId] = it }
+                                cart.get("kot_number")?.takeIf { it.isJsonPrimitive }
+                                    ?.asString?.toIntOrNull()?.let { kotNumbers[tId] = it }
+
+                                // The line items are the numeric keys. Everything else in
+                                // here is metadata ("remarks", "half_items", "<id>item_note_id"),
+                                // and none of those parse as an Int.
+                                val qty = mutableMapOf<Int, Int>()
+                                cart.entrySet().forEach inner@{ (itemKey, itemValue) ->
+                                    val itemId = itemKey.toIntOrNull() ?: return@inner
+                                    if (!itemValue.isJsonPrimitive) return@inner
+                                    val q = itemValue.asString.toDoubleOrNull()?.toInt() ?: return@inner
+                                    if (q > 0) qty[itemId] = q
+                                }
+                                if (qty.isNotEmpty()) itemQuantities[tId] = qty
                             }
                         }
                         
@@ -81,6 +109,9 @@ class TablesViewModel : ViewModel() {
                                     normalisedStatus in BILLED_STATUSES -> TableStatus.BILL_PRINTED
                                     else -> TableStatus.VACANT
                                 },
+                                orderTableId = orderTableIds[tId] ?: 0,
+                                kotNumber = kotNumbers[tId] ?: 1,
+                                itemQuantities = itemQuantities[tId] ?: emptyMap(),
                                 serviceMode = apiTable.serviceCategoryName ?: "Other",
                                 serviceCategoryId = apiTable.serviceCategoryId.coerceToInt()
                             )

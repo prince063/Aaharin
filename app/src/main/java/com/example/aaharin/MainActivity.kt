@@ -116,12 +116,22 @@ fun AaharinApp(
                 tableId = selectedTable?.id ?: 0,
                 tableName = selectedTable?.name ?: "Unknown",
                 runningOrderId = selectedTable?.orderId, // Passing the real Order ID
+                userId = currentUser?.id ?: 0,
+                orderTableId = selectedTable?.orderTableId ?: 0,
+                kotNumber = selectedTable?.kotNumber ?: 1,
+                itemQuantities = selectedTable?.itemQuantities ?: emptyMap(),
+                // The billing call reads the tax rates off the request, so they come from
+                // the logged-in restaurant rather than being assumed.
+                cgst = currentUser?.restaurant?.cgst?.toDoubleOrNull() ?: 2.5,
+                sgst = currentUser?.restaurant?.sgst?.toDoubleOrNull() ?: 2.5,
+                igst = currentUser?.restaurant?.igst?.toDoubleOrNull() ?: 0.0,
                 onBack = { navController.popBackStack() },
                 onAddMore = { navController.navigate("menu") },
-                onPrintBill = { orderId, total -> 
-                    runningOrderId = orderId
-                    runningOrderTotal = total
-                    navController.navigate("checkout") 
+                onPrintBill = { _, _ ->
+                    // Billing closes the order and frees the table, so go back to the list
+                    // where it shows as green. The amount stays outstanding.
+                    showToast("Bill generated")
+                    navController.popBackStack("tables", inclusive = false)
                 },
                 onShiftTable = { showToast("Shift Table for ${selectedTable?.name}") }
             )

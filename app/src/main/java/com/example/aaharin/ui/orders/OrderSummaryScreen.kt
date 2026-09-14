@@ -29,13 +29,19 @@ fun OrderSummaryScreen(
     tableId: Int,
     tableName: String,
     runningOrderId: String? = null,
+    userId: Int = 0,
+    orderTableId: Int = 0,
+    kotNumber: Int = 1,
+    itemQuantities: Map<Int, Int> = emptyMap(),
+    cgst: Double = 2.5,
+    sgst: Double = 2.5,
+    igst: Double = 0.0,
     viewModel: OrderSummaryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     onBack: () -> Unit,
     onAddMore: () -> Unit,
     onPrintBill: (String, Double) -> Unit,
     onShiftTable: () -> Unit
 ) {
-    val context = LocalContext.current
     var showCustomerDialog by remember { mutableStateOf(false) }
 
     // Single effect to trigger fetch
@@ -131,23 +137,27 @@ fun OrderSummaryScreen(
     if (showCustomerDialog) {
         CustomerDetailsPrintDialog(
             onDismiss = { showCustomerDialog = false },
-            onSubmit = { name, mobile, email, gst, address, discount, paymentType ->
+            onSubmit = { name, mobile, _, gst, address, discount, paymentType ->
                 showCustomerDialog = false
                 val idStr = viewModel.orderId?.toString() ?: ""
-                viewModel.printBillWithDetails(
-                    context = context,
+                viewModel.generateBill(
                     accessToken = accessToken,
                     restaurantId = restaurantId,
-                    orderId = idStr,
+                    userId = userId,
                     tableId = tableId,
+                    orderTableId = orderTableId,
+                    kotNumber = kotNumber,
+                    itemQuantities = itemQuantities,
+                    cgst = cgst,
+                    sgst = sgst,
+                    igst = igst,
                     custName = name,
                     custMobile = mobile,
-                    custEmail = email,
                     custGst = gst,
                     custAddress = address,
                     discount = discount,
                     paymentType = paymentType,
-                    onSuccess = { pdfUrl ->
+                    onSuccess = {
                         onPrintBill(idStr, viewModel.totalAmount)
                     }
                 )

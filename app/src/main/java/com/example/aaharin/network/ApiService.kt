@@ -76,6 +76,19 @@ interface ApiService {
         @Body request: SaveKotRequest
     ): Response<ApiResponse<JsonElement>>
 
+    // 7b. Generate Bill
+    //
+    // Same endpoint as saveKot, but with status=Completed and an empty kot_print, which
+    // is what makes the server write the billing record rather than a kitchen ticket.
+    // Returns the item list plus `order_already_placed`, which is 1 when this order was
+    // already billed - the server stops there rather than issuing a second invoice.
+    @POST("item-list-data")
+    suspend fun generateBill(
+        @Header("access_token") accessToken: String,
+        @Header("Access-Token") headerToken: String = accessToken,
+        @Body request: GenerateBillRequest
+    ): Response<JsonElement>
+
     // 8. Place New Order
     @POST("place-order")
     suspend fun placeOrder(

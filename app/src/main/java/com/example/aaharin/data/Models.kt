@@ -10,6 +10,11 @@ data class Table(
     val serviceMode: String = "Dine-In",
     val serviceCategoryId: Int = 0,
     val orderId: String? = null,
+    /** `vaidi_orders.id` - the numeric id the billing call keys off. */
+    val orderTableId: Int = 0,
+    val kotNumber: Int = 1,
+    /** item_id -> quantity for the running order, straight from table-list's cartData. */
+    val itemQuantities: Map<Int, Int> = emptyMap(),
     val itemsSummary: String? = null
 )
 
@@ -99,7 +104,13 @@ data class RestaurantData(
     @SerializedName("restaurant_name", alternate = ["name"]) val name: String,
     @SerializedName("restaurant_address", alternate = ["address"]) val address: String?,
     @SerializedName("gst_no") val gstNo: String?,
-    @SerializedName("upi") val upi: String?
+    @SerializedName("upi") val upi: String?,
+    // The billing call takes the tax rates from the client, not from the restaurant
+    // record, so these have to be carried through or the bill total comes out wrong.
+    // The API sends them as strings ("2.5").
+    @SerializedName("cgst") val cgst: String? = null,
+    @SerializedName("sgst") val sgst: String? = null,
+    @SerializedName("igst") val igst: String? = null
 )
 
 data class DeviceData(
@@ -180,6 +191,37 @@ data class SaveKotRequest(
     @SerializedName("cgst") val cgst: Double = 2.5,
     @SerializedName("sgst") val sgst: Double = 2.5,
     @SerializedName("igst") val igst: Double = 0.0
+)
+
+/**
+ * Generates the bill through `item-list-data`, the same call the web POS makes from
+ * ConfirmOrderController: `status = Completed` with an EMPTY `kot_print` is what makes
+ * getItemDataFromIds() write the vaidi_order_billing record instead of a KOT. Sending a
+ * non-empty kot_print here would print a kitchen ticket and never produce a bill.
+ */
+data class GenerateBillRequest(
+    @SerializedName("item_ids") val itemIds: String,
+    @SerializedName("itemIdQtyArr") val itemIdQtyMap: Map<String, Int>,
+    @SerializedName("order_table_id") val orderTableId: Int,
+    @SerializedName("kot_number") val kotNumber: Int = 1,
+    @SerializedName("table_id") val tableId: Int,
+    @SerializedName("restaurant_id") val restaurantId: Int,
+    @SerializedName("user_id") val userId: Int,
+    @SerializedName("status") val status: String = "Completed",
+    /** Must stay empty - see the class comment. */
+    @SerializedName("kot_print") val kotPrint: String = "",
+    @SerializedName("cart_customer") val cartCustomer: Int = 1,
+    // Tax rates are read from this payload, not from the restaurant row.
+    @SerializedName("cgst") val cgst: Double = 2.5,
+    @SerializedName("sgst") val sgst: Double = 2.5,
+    @SerializedName("igst") val igst: Double = 0.0,
+    @SerializedName("discount") val discount: Double = 0.0,
+    @SerializedName("payment_type") val paymentType: String = "",
+    @SerializedName("mobile_number") val mobileNumber: String = "",
+    @SerializedName("customer_name") val customerName: String = "",
+    @SerializedName("customer_mobile_number") val customerMobile: String = "",
+    @SerializedName("customer_gst") val customerGst: String = "",
+    @SerializedName("customer_address") val customerAddress: String = ""
 )
 
 data class OrderItemRequest(
