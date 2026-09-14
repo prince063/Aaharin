@@ -39,7 +39,7 @@ fun OrderSummaryScreen(
     viewModel: OrderSummaryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     onBack: () -> Unit,
     onAddMore: () -> Unit,
-    onPrintBill: (String, Double) -> Unit,
+    onPrintBill: (billNumber: String?) -> Unit,
     onShiftTable: () -> Unit
 ) {
     var showCustomerDialog by remember { mutableStateOf(false) }
@@ -158,7 +158,7 @@ fun OrderSummaryScreen(
                     discount = discount,
                     paymentType = paymentType,
                     onSuccess = {
-                        onPrintBill(idStr, viewModel.totalAmount)
+                        onPrintBill(viewModel.billNumber)
                     }
                 )
             }

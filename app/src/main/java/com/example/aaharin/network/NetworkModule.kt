@@ -17,11 +17,28 @@ import javax.net.ssl.X509TrustManager
 
 object NetworkModule {
     // Base URLs (matching openapi.yaml servers)
-    const val DEV_BASE_URL = "http://10.0.2.2:20080/apis/backend/web/"
+
+    /**
+     * Emulator only. 10.0.2.2 is the emulator's alias for the host machine and does not
+     * resolve anywhere else, so a real phone using this fails with
+     * "failed to connect to /10.0.2.2 (port 20080)".
+     */
+    const val EMULATOR_BASE_URL = "http://10.0.2.2:20080/apis/backend/web/"
+
+    /**
+     * The dev machine on the local network - works from a real phone AND from the
+     * emulator, as long as both are on the same Wi-Fi.
+     *
+     * This address is handed out by DHCP, so it can change when the PC reconnects. If
+     * the app stops connecting, check the PC's current IPv4 address (`ipconfig`) and
+     * update it here.
+     */
+    const val LAN_BASE_URL = "http://192.168.1.9:20080/apis/backend/web/"
+
     const val PROD_BASE_URL = "https://ahaar1.vaiditech.in/apis/backend/web/"
 
     // Active Base URL
-    const val BASE_URL = DEV_BASE_URL
+    const val BASE_URL = LAN_BASE_URL
     const val SECRET_KEY = "3zA8nD\$wqB4jP@hLz8R5k"
 
     /**

@@ -127,10 +127,13 @@ fun AaharinApp(
                 igst = currentUser?.restaurant?.igst?.toDoubleOrNull() ?: 0.0,
                 onBack = { navController.popBackStack() },
                 onAddMore = { navController.navigate("menu") },
-                onPrintBill = { _, _ ->
+                onPrintBill = { billNumber ->
                     // Billing closes the order and frees the table, so go back to the list
                     // where it shows as green. The amount stays outstanding.
-                    showToast("Bill generated")
+                    showToast(
+                        if (billNumber != null) "Bill $billNumber sent to printer"
+                        else "Bill generated"
+                    )
                     navController.popBackStack("tables", inclusive = false)
                 },
                 onShiftTable = { showToast("Shift Table for ${selectedTable?.name}") }

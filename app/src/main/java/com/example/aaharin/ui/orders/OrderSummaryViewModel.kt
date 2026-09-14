@@ -19,6 +19,8 @@ class OrderSummaryViewModel : ViewModel() {
     }
 
     var orderId by mutableStateOf<Any?>(null)
+    /** Invoice number the printer job was raised against, e.g. "T6-1/00439". */
+    var billNumber by mutableStateOf<String?>(null)
     var orderedItems by mutableStateOf<List<CartItem>>(emptyList())
     var totalAmount by mutableDoubleStateOf(0.0)
     var isLoading by mutableStateOf(false)
@@ -119,6 +121,74 @@ class OrderSummaryViewModel : ViewModel() {
         }
     }
 
+    /**
+     * `vaidi_orders.order_id` for this table's un-billed order, or null if there is none.
+     *
+     * Must be called before the bill is generated: getOrderDetails() filters on
+     * `bill.bill_no is null`, so once billed it answers "Available" instead.
+     */
+    private suspend fun fetchOrderIdForPrint(accessToken: String, tableId: Int): String? {
+        return try {
+            val response = NetworkModule.apiService.getOrderDetails(
+                accessToken = accessToken,
+                request = OrderDetailsRequest(tableId = tableId)
+            )
+
+            val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
+            if (!response.isSuccessful || body?.get("code")?.asString?.toIntOrNull() != 200) {
+                Log.w(TAG, "order-details failed for table $tableId: http=${response.code()}")
+                return null
+            }
+
+            // `data` is the order object, or the string "Available" when nothing is open.
+            val data = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            data.get("order_id")?.takeIf { it.isJsonPrimitive }?.asString
+                ?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.w(TAG, "order-details lookup failed for table $tableId", e)
+            null
+        }
+    }
+
+    /**
+     * Queues the bill on the restaurant's printer and returns the invoice number.
+     *
+     * Null means nothing was printed - the server answers "This order is in progress."
+     * when the order it resolved is not completed, rather than failing outright.
+     */
+    private suspend fun sendToPrinter(
+        accessToken: String,
+        orderIdForPrint: String,
+        tableId: Int,
+        custName: String,
+        custMobile: String
+    ): String? {
+        return try {
+            val response = NetworkModule.apiService.printBill(
+                accessToken = accessToken,
+                request = PrintBillRequest(
+                    orderId = orderIdForPrint,
+                    tableId = tableId,
+                    custName = custName,
+                    custMobile = custMobile
+                )
+            )
+
+            val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
+            val invoice = body?.get("data")?.takeIf { it.isJsonPrimitive }?.asString?.trim()
+
+            if (invoice.isNullOrEmpty() || invoice == "This order is in progress.") {
+                Log.w(TAG, "print-bill produced no invoice for $orderIdForPrint: $invoice")
+                null
+            } else {
+                invoice
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "print-bill failed for $orderIdForPrint", e)
+            null
+        }
+    }
+
     /** item_id -> (name, price) out of the response's category/item tree. */
     private fun readItemPrices(data: JsonObject): Map<Int, Pair<String, Double>> {
         val priced = mutableMapOf<Int, Pair<String, Double>>()
@@ -193,9 +263,15 @@ class OrderSummaryViewModel : ViewModel() {
 
         isLoading = true
         errorMessage = null
+        billNumber = null
 
         viewModelScope.launch {
             try {
+                // Read the order id BEFORE billing: order-details only returns orders that
+                // have no bill yet, and print-bill needs this exact string to find the
+                // right order once it is completed.
+                val orderIdForPrint = fetchOrderIdForPrint(accessToken, tableId)
+
                 val response = NetworkModule.apiService.generateBill(
                     accessToken = accessToken,
                     request = GenerateBillRequest(
@@ -246,6 +322,19 @@ class OrderSummaryViewModel : ViewModel() {
                 if (alreadyPlaced == 1) {
                     errorMessage = "This order has already been billed"
                     return@launch
+                }
+
+                // Bill exists now - hand it to the printer.
+                if (orderIdForPrint != null) {
+                    billNumber = sendToPrinter(accessToken, orderIdForPrint, tableId, custName, custMobile)
+                    if (billNumber == null) {
+                        errorMessage = "Bill generated, but the printer request failed"
+                    }
+                } else {
+                    // Refusing rather than letting print-bill guess from the table id,
+                    // which would print whichever order carries that string.
+                    Log.w(TAG, "no order id for table $tableId - skipping the print request")
+                    errorMessage = "Bill generated, but could not identify the order to print"
                 }
 
                 // Order is closed and billed, so the table is free for the next cover.

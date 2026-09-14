@@ -117,22 +117,20 @@ interface ApiService {
         @Body request: OrderDetailsRequest
     ): Response<JsonElement>
 
-    // 10. Print Bill Form-Encoded
-    @FormUrlEncoded
+    // 10. Print Bill - sends the bill to the printer
+    //
+    // Must be given order_id explicitly. It can look one up from table_id, but only for a
+    // Running order, and by the time the bill exists the order is Completed - so that
+    // lookup misses and the server falls back to using the table id AS the order id,
+    // which would print whichever order happens to carry that string.
+    //
+    // Returns the invoice number in `data` (e.g. "T6-1/00439").
     @POST("print-bill")
-    suspend fun printBillForm(
+    suspend fun printBill(
         @Header("access_token") accessToken: String,
         @Header("Access-Token") headerToken: String = accessToken,
-        @Field("table_id") tableId: Int,
-        @Field("discount") discount: Double = 0.0,
-        @Field("payment_type") paymentType: String = "",
-        @Field("bill_printers") billPrinters: String = "[]",
-        @Field("cust_name") custName: String = "",
-        @Field("cust_mobile") custMobile: String = "",
-        @Field("cust_email") custEmail: String = "",
-        @Field("cust_gst") custGst: String = "",
-        @Field("cust_address") custAddress: String = ""
-    ): Response<PrintBillResponse>
+        @Body request: PrintBillRequest
+    ): Response<JsonElement>
 
     // 11. Settle Order
     @POST("settle-order")
