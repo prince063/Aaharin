@@ -194,6 +194,21 @@ data class SaveKotRequest(
 )
 
 /**
+ * Read-only lookup of the running order's items through `item-list-data`.
+ *
+ * `user_id` is deliberately absent: getItemDataFromIds() only creates or updates an
+ * order when BOTH restaurant_id and user_id are present, so leaving it out is what
+ * keeps this call from writing anything. `confirm_order` makes the response carry
+ * cartData as well, so live quantities come back alongside the prices.
+ */
+data class OrderItemsRequest(
+    @SerializedName("item_ids") val itemIds: String,
+    @SerializedName("table_id") val tableId: Int,
+    @SerializedName("restaurant_id") val restaurantId: Int,
+    @SerializedName("confirm_order") val confirmOrder: Int = 1
+)
+
+/**
  * Generates the bill through `item-list-data`, the same call the web POS makes from
  * ConfirmOrderController: `status = Completed` with an EMPTY `kot_print` is what makes
  * getItemDataFromIds() write the vaidi_order_billing record instead of a KOT. Sending a

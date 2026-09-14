@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.aaharin.data.*
 import com.example.aaharin.network.NetworkModule
+import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 
 class OrderSummaryViewModel : ViewModel() {
@@ -23,98 +24,137 @@ class OrderSummaryViewModel : ViewModel() {
     var isLoading by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
 
-    fun fetchOrderDetails(accessToken: String, restaurantId: Int, tableId: Int, runningOrderId: String? = null) {
+    /**
+     * Loads the running order for a table.
+     *
+     * The items come from the server, keyed off [itemQuantities] - the item ids the table
+     * list reported for this table. Previously this screen could only show what was in the
+     * local cache, so an order placed anywhere else (the web POS, a QR order) appeared
+     * empty here even though the table showed as occupied.
+     *
+     * The `order-details` route this used to call does not exist on the server; it answers
+     * 404, which is why the local cache was the only thing ever displayed.
+     */
+    fun fetchOrderDetails(
+        accessToken: String,
+        restaurantId: Int,
+        tableId: Int,
+        runningOrderId: String? = null,
+        itemQuantities: Map<Int, Int> = emptyMap()
+    ) {
         if (tableId == 0) {
             errorMessage = "Invalid Table"
             return
         }
-        
+
         orderedItems = emptyList()
         totalAmount = 0.0
         orderId = runningOrderId ?: DummyData.getLocalOrderId(tableId)
         isLoading = true
         errorMessage = null
 
+        // Anything ordered on this device shows straight away, then the server view
+        // replaces it - that one also covers items added from elsewhere.
         val localItems = DummyData.getLocalOrder(tableId)
         if (!localItems.isNullOrEmpty()) {
             orderedItems = localItems
             totalAmount = localItems.grandTotal()
-            orderId = DummyData.getLocalOrderId(tableId) ?: runningOrderId ?: tableId.toString()
             isLoading = false
+        }
+
+        if (itemQuantities.isEmpty()) {
+            isLoading = false
+            if (orderedItems.isEmpty()) errorMessage = "No running order on this table"
+            return
         }
 
         viewModelScope.launch {
             try {
-                val response = NetworkModule.apiService.getOrderDetails(
+                val response = NetworkModule.apiService.getOrderItems(
                     accessToken = accessToken,
-                    request = OrderDetailsRequest(tableId = tableId, orderId = runningOrderId)
+                    request = OrderItemsRequest(
+                        itemIds = itemQuantities.keys.joinToString(","),
+                        tableId = tableId,
+                        restaurantId = restaurantId
+                    )
                 )
 
-                if (response.isSuccessful) {
-                    val body = response.body()
-                    if (body != null && body.isJsonObject) {
-                        val json = body.asJsonObject
-                        if (json.get("code")?.asInt == 200) {
-                            val data = if (json.has("data") && json.get("data").isJsonObject) json.get("data").asJsonObject else json
-                            val orderStatus = data.get("status")?.asString
-
-                            if (orderStatus?.lowercase() == "completed" && !localItems.isNullOrEmpty()) {
-                                orderedItems = localItems
-                                totalAmount = localItems.grandTotal()
-                                isLoading = false
-                                return@launch
-                            }
-                            
-                            val sId = data.get("order_id")?.asString ?: data.get("id")?.asString
-                            
-                            orderId = sId ?: DummyData.getLocalOrderId(tableId) ?: runningOrderId ?: tableId.toString()
-
-                            totalAmount = if (data.has("bill_detail") && data.get("bill_detail").isJsonObject) {
-                                val bill = data.get("bill_detail").asJsonObject
-                                val totalStr = bill.get("total")?.asString ?: "0"
-                                totalStr.toDoubleOrNull() ?: 0.0
-                            } else {
-                                data.get("total_amount")?.asDouble ?: 0.0
-                            }
-
-                            val itemsElement = data.get("order_detail")
-                            if (itemsElement != null && itemsElement.isJsonArray) {
-                                orderedItems = itemsElement.asJsonArray.map { element ->
-                                    val obj = element.asJsonObject
-                                    val qty = when {
-                                        obj.has("item_quantity") -> obj.get("item_quantity").asString.toIntOrNull() ?: 1
-                                        obj.has("quantity") -> obj.get("quantity").asInt
-                                        else -> 1
-                                    }
-                                    val itemName = obj.get("item_name")?.asString ?: "Unknown"
-                                    val portion = obj.get("portion")?.asString ?: ""
-                                    val displayName = if (portion.lowercase() == "half") "$itemName (Half)" else itemName
-                                    
-                                    val price = when {
-                                        obj.has("item_price") -> obj.get("item_price").asString.toDoubleOrNull() ?: 0.0
-                                        obj.has("price") -> obj.get("price").asDouble
-                                        else -> 0.0
-                                    }
-
-                                    CartItem(
-                                        menuItem = MenuItem(id = 0, name = displayName, price = price, categoryId = 0),
-                                        quantity = if (qty <= 0) 1 else qty,
-                                        status = ItemStatus.DELIVERED
-                                    )
-                                }
-                            }
-                        }
+                val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
+                val code = body?.get("code")?.asString?.toIntOrNull()
+                if (!response.isSuccessful || code != 200) {
+                    Log.w(TAG, "item lookup failed for table $tableId: http=${response.code()} code=$code")
+                    if (orderedItems.isEmpty()) {
+                        errorMessage = body?.get("error_message")?.asString ?: "Could not load the order"
                     }
-                } else {
-                    if (orderedItems.isEmpty()) errorMessage = "Server error: ${response.code()}"
+                    return@launch
+                }
+
+                val data = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject ?: return@launch
+
+                val priced = readItemPrices(data)
+                val liveQuantities = readCartQuantities(data, tableId)
+                val quantities = liveQuantities.ifEmpty { itemQuantities }
+
+                val items = quantities.mapNotNull { (id, qty) ->
+                    val info = priced[id] ?: return@mapNotNull null
+                    CartItem(
+                        menuItem = MenuItem(id = id, name = info.first, price = info.second, categoryId = 0),
+                        quantity = qty,
+                        status = ItemStatus.DELIVERED
+                    )
+                }
+
+                if (items.isNotEmpty()) {
+                    orderedItems = items
+                    totalAmount = items.grandTotal()
+                } else if (orderedItems.isEmpty()) {
+                    errorMessage = "Could not read the items on this order"
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "order-details sync failed for table $tableId", e)
+                Log.w(TAG, "item lookup failed for table $tableId", e)
                 if (orderedItems.isEmpty()) errorMessage = "Sync Error"
             } finally {
                 isLoading = false
             }
         }
+    }
+
+    /** item_id -> (name, price) out of the response's category/item tree. */
+    private fun readItemPrices(data: JsonObject): Map<Int, Pair<String, Double>> {
+        val priced = mutableMapOf<Int, Pair<String, Double>>()
+        val tableData = data.get("tableData")?.takeIf { it.isJsonObject }?.asJsonObject ?: return priced
+
+        tableData.entrySet().forEach categories@{ (key, value) ->
+            // Categories sit under numeric keys; "order_already_placed" shares the object.
+            if (key.toIntOrNull() == null) return@categories
+            val category = value.takeIf { it.isJsonObject }?.asJsonObject ?: return@categories
+
+            category.get("items")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach items@{ element ->
+                val item = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@items
+                val id = item.get("item_id")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
+                    ?: return@items
+                val name = item.get("item_name")?.takeIf { it.isJsonPrimitive }?.asString ?: "Unknown"
+                val price = item.get("item_price")?.takeIf { it.isJsonPrimitive }
+                    ?.asString?.toDoubleOrNull() ?: 0.0
+                priced[id] = name to price
+            }
+        }
+        return priced
+    }
+
+    /** Live item_id -> quantity for this table, fresher than the table list's snapshot. */
+    private fun readCartQuantities(data: JsonObject, tableId: Int): Map<Int, Int> {
+        val quantities = mutableMapOf<Int, Int>()
+        val cart = data.get("cartData")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get(tableId.toString())?.takeIf { it.isJsonObject }?.asJsonObject ?: return quantities
+
+        cart.entrySet().forEach lines@{ (key, value) ->
+            val id = key.toIntOrNull() ?: return@lines
+            if (!value.isJsonPrimitive) return@lines
+            val qty = value.asString.toDoubleOrNull()?.toInt() ?: return@lines
+            if (qty > 0) quantities[id] = qty
+        }
+        return quantities
     }
 
     /**

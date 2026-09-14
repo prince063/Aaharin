@@ -76,6 +76,18 @@ interface ApiService {
         @Body request: SaveKotRequest
     ): Response<ApiResponse<JsonElement>>
 
+    // 7a. Read the running order's items
+    //
+    // Same endpoint again, but with no user_id, which is the guard that stops the server
+    // creating or touching an order. Used to show an order placed anywhere else - the web
+    // POS, a QR order - since there is no order-details route on the server.
+    @POST("item-list-data")
+    suspend fun getOrderItems(
+        @Header("access_token") accessToken: String,
+        @Header("Access-Token") headerToken: String = accessToken,
+        @Body request: OrderItemsRequest
+    ): Response<JsonElement>
+
     // 7b. Generate Bill
     //
     // Same endpoint as saveKot, but with status=Completed and an empty kot_print, which

@@ -45,8 +45,8 @@ fun OrderSummaryScreen(
     var showCustomerDialog by remember { mutableStateOf(false) }
 
     // Single effect to trigger fetch
-    LaunchedEffect(tableId, runningOrderId) {
-        viewModel.fetchOrderDetails(accessToken, restaurantId, tableId, runningOrderId)
+    LaunchedEffect(tableId, runningOrderId, itemQuantities) {
+        viewModel.fetchOrderDetails(accessToken, restaurantId, tableId, runningOrderId, itemQuantities)
     }
 
     Scaffold(
