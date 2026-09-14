@@ -48,17 +48,23 @@ class CartViewModel : ViewModel() {
                     request = request
                 )
 
-                if (response.isSuccessful) {
-                    val apiResponse = response.body()
-                    if (apiResponse?.code == 200 || response.code() == 200) {
-                        DummyData.setTableOccupiedLocal(tableId, cartItems, null)
-                        onSuccess()
-                    } else {
-                        errorMessage = apiResponse?.errorMessage ?: "Save KOT failed"
-                    }
-                } else {
+                if (!response.isSuccessful) {
                     errorMessage = "Server error: ${response.code()}"
+                    return@launch
                 }
+
+                // The backend answers HTTP 200 even for failures and carries the real
+                // status in the body, so response.code() tells us nothing here. Accepting
+                // either one meant every save reported success - an unauthorised or
+                // rejected KOT still marked the table occupied and moved the user on.
+                val apiResponse = response.body()
+                if (apiResponse?.code != 200) {
+                    errorMessage = apiResponse?.errorMessage ?: "Save KOT failed"
+                    return@launch
+                }
+
+                DummyData.setTableOccupiedLocal(tableId, cartItems, null)
+                onSuccess()
             } catch (e: Exception) {
                 errorMessage = "Connection error: ${e.localizedMessage}"
             } finally {
