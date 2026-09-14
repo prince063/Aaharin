@@ -177,7 +177,13 @@ fun CustomerDetailsPrintDialog(
     var gst by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var discountText by remember { mutableStateOf("0") }
-    var paymentType by remember { mutableStateOf("Cash") }
+    // Printing a bill collects nothing, so it is raised as due and settled later.
+    //
+    // This used to default to "Cash" with no control to change it, which made the server
+    // record the full amount as paid the moment the bill was generated - every bill came
+    // out already settled. "Due" keeps the balance open and leaves the placeholder row the
+    // POS settlement screen expects.
+    val paymentType = "Due"
 
     AlertDialog(
         onDismissRequest = onDismiss,
