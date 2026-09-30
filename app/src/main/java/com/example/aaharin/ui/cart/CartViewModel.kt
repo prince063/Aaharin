@@ -29,8 +29,13 @@ class CartViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                val itemIdsStr = cartItems.map { it.menuItem.id }.joinToString(",")
-                val qtyMap = cartItems.associate { it.menuItem.id.toString() to it.quantity }
+                val itemIdsStr = cartItems.map { it.menuItem.id }.distinct().joinToString(",")
+                // Half portions go in their own array - the server inserts every
+                // itemIdQtyArr entry at full price, so a half left in there was billed full.
+                val qtyMap = cartItems
+                    .filter { !it.isHalf }
+                    .groupBy { it.menuItem.id.toString() }
+                    .mapValues { (_, lines) -> lines.sumOf { it.quantity } }
 
                 val request = SaveKotRequest(
                     confirmOrder = 1,
@@ -40,7 +45,8 @@ class CartViewModel : ViewModel() {
                     userId = if (userId > 0) userId else 1,
                     tableId = tableId,
                     itemIds = itemIdsStr,
-                    itemIdQtyMap = qtyMap
+                    itemIdQtyMap = qtyMap,
+                    halfItemIdQtyMap = cartItems.halfItemIdQtyMap()
                 )
 
                 val response = NetworkModule.apiService.saveKot(

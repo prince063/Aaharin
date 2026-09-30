@@ -22,7 +22,7 @@ import com.example.aaharin.data.CartItem
 import com.example.aaharin.data.Category
 import com.example.aaharin.data.MenuItem
 import com.example.aaharin.data.lineTotal
-import com.example.aaharin.data.subtotal
+import com.example.aaharin.data.menuTotal
 import com.example.aaharin.ui.menu.VegNonVegIndicator
 import com.example.aaharin.util.asRupees
 
@@ -190,7 +190,7 @@ fun KioskMenuScreen(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 20.sp
                             )
-                            val total = cartItems.subtotal()
+                            val total = cartItems.menuTotal()
                             Text(
                                 text = "Total: ${total.asRupees()}",
                                 color = MaterialTheme.colorScheme.primary,
@@ -296,7 +296,7 @@ fun KioskCheckoutScreen(
                         }
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-                    val total = cartItems.subtotal()
+                    val total = cartItems.menuTotal()
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Total Amount", fontWeight = FontWeight.Bold, fontSize = 24.sp)
                         Text(total.asRupees(), fontWeight = FontWeight.Bold, fontSize = 24.sp, color = MaterialTheme.colorScheme.primary)

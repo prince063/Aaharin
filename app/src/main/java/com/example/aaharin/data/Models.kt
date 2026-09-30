@@ -13,8 +13,14 @@ data class Table(
     /** `vaidi_orders.id` - the numeric id the billing call keys off. */
     val orderTableId: Int = 0,
     val kotNumber: Int = 1,
+    /** Total of the bill raised on this table and not settled yet; 0 when there is none. */
+    val billAmount: Double = 0.0,
+    /** Number of that unsettled bill, for the settle screen. */
+    val billNumber: String = "",
     /** item_id -> quantity for the running order, straight from table-list's cartData. */
     val itemQuantities: Map<Int, Int> = emptyMap(),
+    /** Half portions on the running order: item_id -> (price key -> quantity). */
+    val halfItemQuantities: Map<Int, Map<String, Int>> = emptyMap(),
     val itemsSummary: String? = null
 )
 
@@ -33,9 +39,25 @@ data class MenuItem(
     val price: Double,
     val categoryId: Int,
     val isVeg: Boolean = true,
+    /**
+     * The menu price already contains GST (`vaidi_items.is_inclusive_tax`).
+     *
+     * The server cascades this from a parent onto every one of its variations, so a
+     * variant row carries its own answer and is never assumed to be exclusive.
+     */
+    val isInclusiveTax: Boolean = false,
     val hasHalfOption: Boolean = false,
     val halfPrice: Double? = null,
     val isFavourite: Boolean = false,
+    /** Absolute URL of the item photo; empty when the item has none. */
+    val imageUrl: String = "",
+    /**
+     * Label of this row as one of its parent's variations ("Half", "500ml", ...).
+     *
+     * Empty on a normal item, and also on a variation whose label the server could not
+     * make more specific than the parent's own name.
+     */
+    val variantLabel: String = "",
     val variants: List<MenuItem> = emptyList()
 )
 
@@ -132,7 +154,23 @@ data class ApiTableItem(
     @SerializedName("service_category_id") val serviceCategoryId: Any?,
     @SerializedName("service_category_name") val serviceCategoryName: String?,
     @SerializedName("status") val status: String?,
-    @SerializedName("occupied_capacity") val occupiedCapacity: Any?
+    @SerializedName("occupied_capacity") val occupiedCapacity: Any?,
+    /**
+     * Bills raised on this table that nobody has settled - what makes it green.
+     *
+     * More than one only when the bill was split; the newest is first.
+     */
+    @SerializedName("awaiting_settlement") val awaitingSettlement: List<ApiAwaitingBill>? = null
+)
+
+/** One unsettled bill out of a table's `awaiting_settlement`. */
+data class ApiAwaitingBill(
+    @SerializedName("order_table_id") val orderTableId: Any? = null,
+    @SerializedName("order_id") val orderId: String? = null,
+    @SerializedName("billing_id") val billingId: Any? = null,
+    @SerializedName("bill_no") val billNo: String? = null,
+    @SerializedName("grand_total") val grandTotal: Any? = null,
+    @SerializedName("discount") val discount: Any? = null
 )
 
 data class ApiMenuItem(
@@ -140,12 +178,46 @@ data class ApiMenuItem(
     @SerializedName("item_name", alternate = ["name", "product_name"]) val itemName: String?,
     @SerializedName("item_type", alternate = ["type", "veg_non_veg"]) val itemType: String?,
     @SerializedName("item_price", alternate = ["price", "amount"]) val itemPrice: Any?,
+    // The server sends this already absolute (it builds it from BACKEND_UPLOAD_URL), and
+    // as an empty string for items with no photo.
+    @SerializedName("item_img", alternate = ["image", "item_image"]) val itemImg: String?,
     @SerializedName("category_id") val categoryId: Any?,
     @SerializedName("category_name") val categoryName: String?,
     @SerializedName("sub_category_id") val subCategoryId: Any?,
     @SerializedName("sub_category_name") val subCategoryName: String?,
     @SerializedName("is_favourite") val isFavourite: Any? = null,
+    /** Set on rows inside [variations]; the server strips the "<parent> - " prefix. */
+    @SerializedName("variation_label") val variationLabel: String? = null,
+    /** 1 when the price already includes GST; sent on variation rows too. */
+    @SerializedName("is_inclusive_tax") val isInclusiveTax: Any? = null,
+    /** Whether a half portion can be ordered; the server resolves item vs category. */
+    @SerializedName("allow_half") val allowHalf: Any? = null,
+    /** Price of the half portion, already resolved by the server; null when not allowed. */
+    @SerializedName("half_price") val halfPrice: Any? = null,
+    /**
+     * The item's sellable variations. A parent that has these is not orderable itself -
+     * only one of its children can go on an order, which is how the web POS behaves.
+     */
     @SerializedName("variations") val variations: List<ApiMenuItem>? = null
+)
+
+/**
+ * Body for `item-list`.
+ *
+ * [itemSearch] is matched by the server against both `item_name` and `item_code` (and
+ * against the same two columns on an item's variations), which is the only way to look an
+ * item up by its code - the code itself is not part of the menu payload, so the device
+ * cannot filter on it locally.
+ *
+ * Deliberately carries no `restaurant_id`: the controller answers a body that has one
+ * without checking the access token at all, and takes the restaurant from whatever was
+ * sent. Leaving it out keeps the request on the authenticated path, where the restaurant
+ * comes from the token - which is also what this call did before it became a JSON body.
+ */
+data class ItemListRequest(
+    @SerializedName("access_token") val accessToken: String,
+    @SerializedName("table_id") val tableId: Int,
+    @SerializedName("itemSearch") val itemSearch: String = ""
 )
 
 data class RefreshTokenRequest(
@@ -188,6 +260,11 @@ data class SaveKotRequest(
     @SerializedName("kot_number") val kotNumber: Int = 1,
     @SerializedName("item_ids") val itemIds: String,
     @SerializedName("itemIdQtyArr") val itemIdQtyMap: Map<String, Int>,
+    /**
+     * Half portions, as item_id -> (price key -> quantity) - the nested shape
+     * Utility.php expects; a flat item_id -> quantity entry is ignored by the server.
+     */
+    @SerializedName("halfItemIdQtyArr") val halfItemIdQtyMap: Map<String, Map<String, Int>> = emptyMap(),
     @SerializedName("cgst") val cgst: Double = 2.5,
     @SerializedName("sgst") val sgst: Double = 2.5,
     @SerializedName("igst") val igst: Double = 0.0

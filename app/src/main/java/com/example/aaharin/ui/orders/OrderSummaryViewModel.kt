@@ -42,7 +42,8 @@ class OrderSummaryViewModel : ViewModel() {
         restaurantId: Int,
         tableId: Int,
         runningOrderId: String? = null,
-        itemQuantities: Map<Int, Int> = emptyMap()
+        itemQuantities: Map<Int, Int> = emptyMap(),
+        halfItemQuantities: Map<Int, Map<String, Int>> = emptyMap()
     ) {
         if (tableId == 0) {
             errorMessage = "Invalid Table"
@@ -64,7 +65,7 @@ class OrderSummaryViewModel : ViewModel() {
             isLoading = false
         }
 
-        if (itemQuantities.isEmpty()) {
+        if (itemQuantities.isEmpty() && halfItemQuantities.isEmpty()) {
             isLoading = false
             if (orderedItems.isEmpty()) errorMessage = "No running order on this table"
             return
@@ -75,7 +76,7 @@ class OrderSummaryViewModel : ViewModel() {
                 val response = NetworkModule.apiService.getOrderItems(
                     accessToken = accessToken,
                     request = OrderItemsRequest(
-                        itemIds = itemQuantities.keys.joinToString(","),
+                        itemIds = orderItemIds(itemQuantities, halfItemQuantities),
                         tableId = tableId,
                         restaurantId = restaurantId
                     )
@@ -94,17 +95,55 @@ class OrderSummaryViewModel : ViewModel() {
                 val data = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject ?: return@launch
 
                 val priced = readItemPrices(data)
-                val liveQuantities = readCartQuantities(data, tableId)
-                val quantities = liveQuantities.ifEmpty { itemQuantities }
+                val liveCart = data.get("cartData")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get(tableId.toString())?.takeIf { it.isJsonObject }?.asJsonObject
+                val liveQuantities = readCartQuantities(liveCart)
+                val liveHalf = readHalfItems(liveCart?.get("half_items"))
+                // Trust the live cart only when it has something in it; otherwise fall
+                // back to what the table list reported for both kinds of line.
+                val useLive = liveQuantities.isNotEmpty() || liveHalf.isNotEmpty()
+                val quantities = if (useLive) liveQuantities else itemQuantities
+                val halfQuantities = if (useLive) liveHalf else halfItemQuantities
 
-                val items = quantities.mapNotNull { (id, qty) ->
+                val fullItems = quantities.mapNotNull { (id, qty) ->
                     val info = priced[id] ?: return@mapNotNull null
                     CartItem(
-                        menuItem = MenuItem(id = id, name = info.first, price = info.second, categoryId = 0),
+                        menuItem = MenuItem(
+                            id = id,
+                            name = info.name,
+                            price = info.price,
+                            categoryId = 0,
+                            isInclusiveTax = info.isInclusiveTax
+                        ),
                         quantity = qty,
                         status = ItemStatus.DELIVERED
                     )
                 }
+
+                // Each price bucket is its own line. The key is the per-unit price the
+                // server stored, which is already the amount it charges GST on, so the
+                // line is priced as tax-exclusive whatever the catalog flag says.
+                val halfItems = halfQuantities.flatMap { (id, buckets) ->
+                    val info = priced[id] ?: return@flatMap emptyList()
+                    buckets.map { (priceKey, qty) ->
+                        val halfPrice = priceKey.toDoubleOrNull()?.takeIf { it > 0.0 }
+                        CartItem(
+                            menuItem = MenuItem(
+                                id = id,
+                                name = info.name,
+                                price = info.price,
+                                categoryId = 0,
+                                isInclusiveTax = halfPrice == null && info.isInclusiveTax,
+                                hasHalfOption = true,
+                                halfPrice = halfPrice ?: (info.price / 2)
+                            ),
+                            quantity = qty,
+                            isHalf = true,
+                            status = ItemStatus.DELIVERED
+                        )
+                    }
+                }
+                val items = fullItems + halfItems
 
                 if (items.isNotEmpty()) {
                     orderedItems = items
@@ -122,36 +161,12 @@ class OrderSummaryViewModel : ViewModel() {
     }
 
     /**
-     * `vaidi_orders.order_id` for this table's un-billed order, or null if there is none.
+     * Hands the bill to the web app, which renders the PDF and sends it to the printer.
      *
-     * Must be called before the bill is generated: getOrderDetails() filters on
-     * `bill.bill_no is null`, so once billed it answers "Available" instead.
-     */
-    private suspend fun fetchOrderIdForPrint(accessToken: String, tableId: Int): String? {
-        return try {
-            val response = NetworkModule.apiService.getOrderDetails(
-                accessToken = accessToken,
-                request = OrderDetailsRequest(tableId = tableId)
-            )
-
-            val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
-            if (!response.isSuccessful || body?.get("code")?.asString?.toIntOrNull() != 200) {
-                Log.w(TAG, "order-details failed for table $tableId: http=${response.code()}")
-                return null
-            }
-
-            // `data` is the order object, or the string "Available" when nothing is open.
-            val data = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
-            data.get("order_id")?.takeIf { it.isJsonPrimitive }?.asString
-                ?.trim()?.takeIf { it.isNotEmpty() }
-        } catch (e: Exception) {
-            Log.w(TAG, "order-details lookup failed for table $tableId", e)
-            null
-        }
-    }
-
-    /**
-     * Queues the bill on the restaurant's printer and returns the invoice number.
+     * Deliberately the admin app's endpoint and not the API app's. The API one returns
+     * the invoice number but writes no PDF and queues no print job - the bill layout is a
+     * backend view it cannot render. The admin one does the whole job, and returns the
+     * same invoice number.
      *
      * Null means nothing was printed - the server answers "This order is in progress."
      * when the order it resolved is not completed, rather than failing outright.
@@ -164,6 +179,16 @@ class OrderSummaryViewModel : ViewModel() {
         custMobile: String
     ): String? {
         return try {
+            // The API app's own print-bill, not the admin app's.
+            //
+            // The admin app authenticates by matching the token against the stored
+            // vaidi_users.access_token string, while every other call this app makes is
+            // authenticated by decoding the JWT. The moment those two drift apart - a
+            // refreshed token, or a second login overwriting the column - the admin route
+            // answers HTTP 500 (its unauthorized branch calls send() without returning and
+            // then dereferences the empty user row), so no invoice number ever came back
+            // and the bill was never announced as printed. This route also queues the
+            // actual printer job, which the admin one never did.
             val response = NetworkModule.apiService.printBill(
                 accessToken = accessToken,
                 request = PrintBillRequest(
@@ -173,6 +198,11 @@ class OrderSummaryViewModel : ViewModel() {
                     custMobile = custMobile
                 )
             )
+
+            if (!response.isSuccessful) {
+                Log.w(TAG, "print-bill HTTP ${response.code()} for $orderIdForPrint")
+                return null
+            }
 
             val body = response.body()?.takeIf { it.isJsonObject }?.asJsonObject
             val invoice = body?.get("data")?.takeIf { it.isJsonPrimitive }?.asString?.trim()
@@ -189,9 +219,16 @@ class OrderSummaryViewModel : ViewModel() {
         }
     }
 
-    /** item_id -> (name, price) out of the response's category/item tree. */
-    private fun readItemPrices(data: JsonObject): Map<Int, Pair<String, Double>> {
-        val priced = mutableMapOf<Int, Pair<String, Double>>()
+    /** The fields of an `item-list-data` row the summary prices an order from. */
+    private data class PricedItem(
+        val name: String,
+        val price: Double,
+        val isInclusiveTax: Boolean
+    )
+
+    /** item_id -> priced row out of the response's category/item tree. */
+    private fun readItemPrices(data: JsonObject): Map<Int, PricedItem> {
+        val priced = mutableMapOf<Int, PricedItem>()
         val tableData = data.get("tableData")?.takeIf { it.isJsonObject }?.asJsonObject ?: return priced
 
         tableData.entrySet().forEach categories@{ (key, value) ->
@@ -206,17 +243,26 @@ class OrderSummaryViewModel : ViewModel() {
                 val name = item.get("item_name")?.takeIf { it.isJsonPrimitive }?.asString ?: "Unknown"
                 val price = item.get("item_price")?.takeIf { it.isJsonPrimitive }
                     ?.asString?.toDoubleOrNull() ?: 0.0
-                priced[id] = name to price
+                // Without this an inclusive-tax item gets GST added on top of a price
+                // that already contains it, and the summary overstates the bill.
+                val isInclusiveTax = item.get("is_inclusive_tax")?.takeIf { it.isJsonPrimitive }
+                    ?.asString?.toIntOrNull() == 1
+                priced[id] = PricedItem(name, price, isInclusiveTax)
             }
         }
         return priced
     }
 
-    /** Live item_id -> quantity for this table, fresher than the table list's snapshot. */
-    private fun readCartQuantities(data: JsonObject, tableId: Int): Map<Int, Int> {
+    /** Every item id on the order, full and half, as `item_ids` wants them. */
+    private fun orderItemIds(
+        itemQuantities: Map<Int, Int>,
+        halfItemQuantities: Map<Int, Map<String, Int>>
+    ): String = (itemQuantities.keys + halfItemQuantities.keys).joinToString(",")
+
+    /** Live full-portion item_id -> quantity for this table, fresher than the table list's snapshot. */
+    private fun readCartQuantities(cart: JsonObject?): Map<Int, Int> {
         val quantities = mutableMapOf<Int, Int>()
-        val cart = data.get("cartData")?.takeIf { it.isJsonObject }?.asJsonObject
-            ?.get(tableId.toString())?.takeIf { it.isJsonObject }?.asJsonObject ?: return quantities
+        if (cart == null) return quantities
 
         cart.entrySet().forEach lines@{ (key, value) ->
             val id = key.toIntOrNull() ?: return@lines
@@ -243,8 +289,11 @@ class OrderSummaryViewModel : ViewModel() {
         userId: Int,
         tableId: Int,
         orderTableId: Int,
+        /** vaidi_orders.order_id - the string print-bill matches on. */
+        orderIdForPrint: String?,
         kotNumber: Int,
         itemQuantities: Map<Int, Int>,
+        halfItemQuantities: Map<Int, Map<String, Int>> = emptyMap(),
         cgst: Double,
         sgst: Double,
         igst: Double,
@@ -256,7 +305,7 @@ class OrderSummaryViewModel : ViewModel() {
         paymentType: String = "",
         onSuccess: () -> Unit
     ) {
-        if (orderTableId <= 0 || itemQuantities.isEmpty()) {
+        if (orderTableId <= 0 || (itemQuantities.isEmpty() && halfItemQuantities.isEmpty())) {
             errorMessage = "No running order found for this table - reopen it and try again"
             return
         }
@@ -267,18 +316,13 @@ class OrderSummaryViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                // Read the order id BEFORE billing: order-details only returns orders that
-                // have no bill yet, and print-bill needs this exact string to find the
-                // right order once it is completed.
-                val orderIdForPrint = fetchOrderIdForPrint(accessToken, tableId)
-
                 val response = NetworkModule.apiService.generateBill(
                     accessToken = accessToken,
                     request = GenerateBillRequest(
                         // item_ids only - the controller needs it to resolve the menu, but
                         // itemIdQtyArr is left empty so nothing is re-inserted. See the
                         // field's comment: passing the order's lines here duplicated them.
-                        itemIds = itemQuantities.keys.joinToString(","),
+                        itemIds = orderItemIds(itemQuantities, halfItemQuantities),
                         orderTableId = orderTableId,
                         kotNumber = kotNumber,
                         tableId = tableId,
@@ -337,7 +381,8 @@ class OrderSummaryViewModel : ViewModel() {
                     errorMessage = "Bill generated, but could not identify the order to print"
                 }
 
-                // Order is closed and billed, so the table is free for the next cover.
+                // The order is closed, so this device's running-order overlay is stale. The
+                // table's colour now comes from the server's awaiting_settlement.
                 if (tableId != 0) {
                     DummyData.clearLocalOccupancy(tableId)
                 }

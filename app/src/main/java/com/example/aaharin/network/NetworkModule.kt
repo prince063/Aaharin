@@ -16,36 +16,20 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 object NetworkModule {
-    // Base URLs (matching openapi.yaml servers)
 
     /**
-     * Emulator only. 10.0.2.2 is the emulator's alias for the host machine and does not
-     * resolve anywhere else, so a real phone using this fails with
-     * "failed to connect to /10.0.2.2 (port 20080)".
+     * Where the server lives. Read fresh from [ServerConfig] on every use - it is a
+     * device setting now, not a build constant, so one APK can be pointed anywhere.
      */
-    const val EMULATOR_BASE_URL = "http://10.0.2.2:20080/apis/backend/web/"
+    val BASE_URL: String get() = ServerConfig.baseUrl
 
-    /**
-     * The dev machine on the local network - works from a real phone AND from the
-     * emulator, as long as both are on the same Wi-Fi.
-     *
-     * This address is handed out by DHCP, so it can change when the PC reconnects. If
-     * the app stops connecting, check the PC's current IPv4 address (`ipconfig`) and
-     * update it here.
-     */
-    const val LAN_BASE_URL = "http://192.168.1.9:20080/apis/backend/web/"
-
-    const val PROD_BASE_URL = "https://ahaar1.vaiditech.in/apis/backend/web/"
-
-    // Active Base URL
-    const val BASE_URL = LAN_BASE_URL
     const val SECRET_KEY = "3zA8nD\$wqB4jP@hLz8R5k"
 
     /**
      * Root of the server, without the `/apis/backend/web/` suffix.
      * Used to build absolute URLs for assets the API returns as relative paths.
      */
-    val SERVER_ROOT: String = BASE_URL.substringBefore("/apis/")
+    val SERVER_ROOT: String get() = ServerConfig.serverRoot
 
     /**
      * Certificate validation is disabled ONLY on debug builds, where the dev server
@@ -94,12 +78,29 @@ object NetworkModule {
         return builder.build()
     }
 
-    val apiService: ApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create(gson))
-            .client(buildOkHttpClient())
-            .build()
-            .create(ApiService::class.java)
-    }
+    @Volatile private var cachedService: ApiService? = null
+    @Volatile private var cachedUrl: String? = null
+
+    /**
+     * Rebuilt whenever the configured address changes.
+     *
+     * This was a `by lazy`, which pinned the first URL for the life of the process - so
+     * changing the server in Settings did nothing until the app was restarted.
+     */
+    val apiService: ApiService
+        @Synchronized get() {
+            val url = BASE_URL
+            var service = cachedService
+            if (service == null || cachedUrl != url) {
+                service = Retrofit.Builder()
+                    .baseUrl(url)
+                    .addConverterFactory(GsonConverterFactory.create(gson))
+                    .client(buildOkHttpClient())
+                    .build()
+                    .create(ApiService::class.java)
+                cachedService = service
+                cachedUrl = url
+            }
+            return service
+        }
 }

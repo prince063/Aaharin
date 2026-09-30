@@ -48,6 +48,11 @@ class CheckoutViewModel : ViewModel() {
                     } else {
                         errorMessage = body?.errorMessage ?: "Settlement failed"
                     }
+                } else if (response.code() == 404 || response.code() == 405) {
+                    // This deployment's API app exposes no settle-order route at all, so
+                    // the call can only ever 404. Saying "server error" sent staff looking
+                    // for a network fault that was not there.
+                    errorMessage = "This server has no settlement API - settle the bill from the POS dashboard."
                 } else {
                     errorMessage = "Server error: ${response.code()}"
                 }

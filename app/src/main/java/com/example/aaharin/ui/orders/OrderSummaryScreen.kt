@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.aaharin.data.CartItem
@@ -33,6 +34,7 @@ fun OrderSummaryScreen(
     orderTableId: Int = 0,
     kotNumber: Int = 1,
     itemQuantities: Map<Int, Int> = emptyMap(),
+    halfItemQuantities: Map<Int, Map<String, Int>> = emptyMap(),
     cgst: Double = 2.5,
     sgst: Double = 2.5,
     igst: Double = 0.0,
@@ -45,8 +47,10 @@ fun OrderSummaryScreen(
     var showCustomerDialog by remember { mutableStateOf(false) }
 
     // Single effect to trigger fetch
-    LaunchedEffect(tableId, runningOrderId, itemQuantities) {
-        viewModel.fetchOrderDetails(accessToken, restaurantId, tableId, runningOrderId, itemQuantities)
+    LaunchedEffect(tableId, runningOrderId, itemQuantities, halfItemQuantities) {
+        viewModel.fetchOrderDetails(
+            accessToken, restaurantId, tableId, runningOrderId, itemQuantities, halfItemQuantities
+        )
     }
 
     Scaffold(
@@ -62,7 +66,9 @@ fun OrderSummaryScreen(
         },
         bottomBar = {
             Surface(tonalElevation = 8.dp) {
-                Column {
+                // Edge-to-edge draws behind the system navigation bar, which was
+                // covering the bottom of the buttons.
+                Column(modifier = Modifier.navigationBarsPadding()) {
                     if (viewModel.totalAmount > 0) {
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
@@ -72,19 +78,32 @@ fun OrderSummaryScreen(
                             Text(viewModel.totalAmount.asRupees(), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                         }
                     }
+                    // Fixed-width buttons overflowed a phone-width row and pushed Print Bill
+                    // off the edge, so each takes an equal share of the width instead.
                     Row(
                         modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        ActionFab(icon = Icons.Default.Add, label = "Add Items", color = MaterialTheme.colorScheme.primary, onClick = onAddMore)
-                        ActionFab(icon = Icons.Default.SwapHoriz, label = "Shift", color = MaterialTheme.colorScheme.secondary, onClick = onShiftTable)
                         ActionFab(
-                            icon = Icons.Default.Print, 
-                            label = "Print Bill", 
-                            color = Color(0xFF4CAF50), 
-                            onClick = { 
-                                showCustomerDialog = true
-                            }
+                            icon = Icons.Default.Add,
+                            label = "Add Items",
+                            color = MaterialTheme.colorScheme.primary,
+                            onClick = onAddMore,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ActionFab(
+                            icon = Icons.Default.SwapHoriz,
+                            label = "Shift",
+                            color = MaterialTheme.colorScheme.secondary,
+                            onClick = onShiftTable,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ActionFab(
+                            icon = Icons.Default.Print,
+                            label = "Print Bill",
+                            color = Color(0xFF4CAF50),
+                            onClick = { showCustomerDialog = true },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -120,7 +139,7 @@ fun OrderSummaryScreen(
                         Text("Current Items", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
-                    
+
                     // Server rows all come back with id 0, so position is the only
                     // stable identity available here.
                     itemsIndexed(
@@ -146,8 +165,10 @@ fun OrderSummaryScreen(
                     userId = userId,
                     tableId = tableId,
                     orderTableId = orderTableId,
+                    orderIdForPrint = runningOrderId,
                     kotNumber = kotNumber,
                     itemQuantities = itemQuantities,
+                    halfItemQuantities = halfItemQuantities,
                     cgst = cgst,
                     sgst = sgst,
                     igst = igst,
@@ -177,13 +198,14 @@ fun CustomerDetailsPrintDialog(
     var gst by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var discountText by remember { mutableStateOf("0") }
-    // Printing a bill collects nothing, so it is raised as due and settled later.
+    // Printing a bill collects nothing, so no payment mode is sent at all - the amount
+    // stays outstanding and is settled later from the POS.
     //
     // This used to default to "Cash" with no control to change it, which made the server
     // record the full amount as paid the moment the bill was generated - every bill came
-    // out already settled. "Due" keeps the balance open and leaves the placeholder row the
-    // POS settlement screen expects.
-    val paymentType = "Due"
+    // out already settled. Sending "Due" instead still wrote a payment row, so the field
+    // is left empty: item-list-data only records a payment when payment_type is non-empty.
+    val paymentType = ""
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -264,7 +286,7 @@ fun OrderedItemRow(item: CartItem) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "${item.quantity}x ${item.menuItem.name}",
+                text = "${item.quantity}x ${item.menuItem.name}${if (item.isHalf) " (Half)" else ""}",
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
             )
@@ -283,14 +305,21 @@ fun OrderedItemRow(item: CartItem) {
 }
 
 @Composable
-fun ActionFab(icon: ImageVector, label: String, color: Color, onClick: () -> Unit) {
+fun ActionFab(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Button(
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = color),
-        modifier = Modifier.height(48.dp)
+        contentPadding = PaddingValues(horizontal = 8.dp),
+        modifier = modifier.height(48.dp)
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(label)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
     }
 }

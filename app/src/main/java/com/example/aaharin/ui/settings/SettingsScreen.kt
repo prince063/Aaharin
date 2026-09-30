@@ -9,11 +9,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import com.example.aaharin.network.ServerConfig
+import com.example.aaharin.ui.components.ServerSetupDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
-    var apiUrl by remember { mutableStateOf("https://ahaar.vaiditech.in/apis/backend/web/") }
+    // Reflects what is actually saved. This field used to hold a hardcoded string that
+    // nothing stored and nothing read.
+    var serverAddress by remember { mutableStateOf(ServerConfig.address) }
+    var showServerSetup by remember { mutableStateOf(false) }
     var kotPrinter by remember { mutableStateOf("EPSON TM-T82III") }
     var billPrinter by remember { mutableStateOf("Billing Printer 80mm") }
     var whatsappNumber by remember { mutableStateOf("919876543210") }
@@ -40,9 +45,19 @@ fun SettingsScreen(onBack: () -> Unit) {
         ) {
             Text("General Configuration", fontWeight = FontWeight.Bold, fontSize = 18.sp)
             OutlinedTextField(
-                value = apiUrl,
-                onValueChange = { apiUrl = it },
-                label = { Text("API Base URL") },
+                value = if (serverAddress.isBlank()) "Not set" else serverAddress,
+                onValueChange = {},
+                label = { Text("Server Address") },
+                supportingText = {
+                    Text(
+                        if (serverAddress.isBlank()) "Tap Change to point the app at your server"
+                        else ServerConfig.toBaseUrl(serverAddress)
+                    )
+                },
+                readOnly = true,
+                trailingIcon = {
+                    TextButton(onClick = { showServerSetup = true }) { Text("Change") }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -83,5 +98,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text("SAVE SETTINGS")
             }
         }
+    }
+
+    if (showServerSetup) {
+        ServerSetupDialog(
+            onDismiss = { showServerSetup = false },
+            onSaved = {
+                serverAddress = ServerConfig.address
+                showServerSetup = false
+            }
+        )
     }
 }

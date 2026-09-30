@@ -9,7 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "com.example.aaharin"
-        minSdk = 35
+        // Android 8.0, the floor the adaptive launcher icons need. Was 35 (Android 15),
+        // which meant the APK would only install on phones running Android 15 or newer -
+        // everything else refused it with "problem parsing the package".
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -70,6 +73,11 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.logging)
+
+    // Item photos. The okhttp artifact is what gives Coil a network fetcher; without it
+    // every http(s) URL fails to load.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

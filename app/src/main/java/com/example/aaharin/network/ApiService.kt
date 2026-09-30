@@ -44,16 +44,17 @@ interface ApiService {
     ): Response<ApiResponse<TableListResponse>>
 
     // 5. Fetch Menu Items Catalog
-    @FormUrlEncoded
+    //
+    // Sent as a JSON body, not a form. The controller reads php://input and json_decodes
+    // it, so form fields never reached it - the menu still loaded because it falls back
+    // to the header token, but `itemSearch` was silently dropped on every request. With a
+    // JSON body the server does the search itself, matching item_name OR item_code.
     @POST("item-list")
     suspend fun getItemList(
         @Header("Access-Token") headerToken: String,
         @Header("access_token") headerTokenLowercase: String = headerToken,
         @Query("access_token") queryToken: String = headerToken,
-        @Field("access_token") fieldToken: String = headerToken,
-        @Field("restaurant_id") restaurantId: Int,
-        @Field("table_id") tableId: Int,
-        @Field("itemSearch") itemSearch: String? = null
+        @Body request: ItemListRequest
     ): Response<ApiResponse<JsonElement>>
 
     // 6. Menu Sync
@@ -124,7 +125,10 @@ interface ApiService {
     // lookup misses and the server falls back to using the table id AS the order id,
     // which would print whichever order happens to carry that string.
     //
-    // Returns the invoice number in `data` (e.g. "T6-1/00439").
+    // Returns the invoice number in `data` (e.g. "T6-1/00439"), and queues the printer
+    // job for the bill. The admin app has a route of the same name, but it authenticates
+    // against vaidi_users.access_token instead of the JWT and queues nothing - see
+    // OrderSummaryViewModel.sendToPrinter.
     @POST("print-bill")
     suspend fun printBill(
         @Header("access_token") accessToken: String,

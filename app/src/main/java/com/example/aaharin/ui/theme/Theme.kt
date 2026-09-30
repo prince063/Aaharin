@@ -1,5 +1,6 @@
 package com.example.aaharin.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -38,9 +39,10 @@ fun AaharinTheme(
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    // minSdk is 35, so the Android 12 (S) guard that used to wrap this is always true.
+    // dynamic*ColorScheme is API 31+. The guard is required again now that minSdk is 26 -
+    // without it the app crashes on launch on Android 8 through 11.
     val colorScheme = when {
-        dynamicColor -> {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }

@@ -18,7 +18,6 @@ import com.example.aaharin.ui.components.WhatsAppDialog
 import com.example.aaharin.ui.login.LoginScreen
 import com.example.aaharin.ui.menu.MenuScreen
 import com.example.aaharin.ui.orders.OrderSummaryScreen
-import com.example.aaharin.ui.reports.ReportsScreen
 import com.example.aaharin.ui.settings.SettingsScreen
 import com.example.aaharin.ui.tables.TableListingScreen
 import com.example.aaharin.ui.theme.AaharinTheme
@@ -67,6 +66,13 @@ fun AaharinApp(
         composable("login") {
             LoginScreen { response ->
                 currentUser = response
+                // Cart totals use the restaurant's own GST rates rather than an assumed
+                // 5%, which is what the billing call has always sent.
+                TaxRates.update(
+                    cgst = response.restaurant.cgst?.toDoubleOrNull() ?: 2.5,
+                    sgst = response.restaurant.sgst?.toDoubleOrNull() ?: 2.5,
+                    igst = response.restaurant.igst?.toDoubleOrNull() ?: 0.0
+                )
                 navController.navigate("tables") {
                     popUpTo("login") { inclusive = true }
                 }
@@ -78,12 +84,24 @@ fun AaharinApp(
                 accessToken = currentUser?.accessToken ?: "",
                 restaurantId = currentUser?.restaurant?.id ?: 0,
                 isDarkMode = isDarkMode,
+                userName = listOfNotNull(currentUser?.firstName, currentUser?.lastName)
+                    .joinToString(" ")
+                    .trim(),
+                userMobile = currentUser?.mobileNumber.orEmpty(),
+                restaurantName = currentUser?.restaurant?.name.orEmpty(),
                 onTableClick = { table ->
                     selectedTable = table
                     when (table.status) {
                         TableStatus.VACANT -> navController.navigate("menu")
                         TableStatus.OCCUPIED -> navController.navigate("order_summary")
-                        TableStatus.BILL_PRINTED -> navController.navigate("checkout")
+                        TableStatus.BILL_PRINTED -> {
+                            // Checkout settles whatever these two hold, and nothing ever
+                            // assigned them - a green table opened the settle screen with
+                            // no order id and Rs 0 to collect.
+                            runningOrderId = table.orderId.orEmpty()
+                            runningOrderTotal = table.billAmount
+                            navController.navigate("checkout")
+                        }
                     }
                 },
                 onLogout = {
@@ -91,18 +109,11 @@ fun AaharinApp(
                         popUpTo("tables") { inclusive = true }
                     }
                 },
-                onViewReports = {
-                    navController.navigate("reports")
-                },
                 onViewSettings = {
                     navController.navigate("settings")
                 },
                 onToggleTheme = onToggleTheme
             )
-        }
-        
-        composable("reports") {
-            ReportsScreen(onBack = { navController.popBackStack() })
         }
         
         composable("settings") {
@@ -120,6 +131,7 @@ fun AaharinApp(
                 orderTableId = selectedTable?.orderTableId ?: 0,
                 kotNumber = selectedTable?.kotNumber ?: 1,
                 itemQuantities = selectedTable?.itemQuantities ?: emptyMap(),
+                halfItemQuantities = selectedTable?.halfItemQuantities ?: emptyMap(),
                 // The billing call reads the tax rates off the request, so they come from
                 // the logged-in restaurant rather than being assumed.
                 cgst = currentUser?.restaurant?.cgst?.toDoubleOrNull() ?: 2.5,
@@ -128,8 +140,8 @@ fun AaharinApp(
                 onBack = { navController.popBackStack() },
                 onAddMore = { navController.navigate("menu") },
                 onPrintBill = { billNumber ->
-                    // Billing closes the order and frees the table, so go back to the list
-                    // where it shows as green. The amount stays outstanding.
+                    // Billing closes the order but the amount stays outstanding, so back on
+                    // the list the table shows as Unsettled until it is settled.
                     showToast(
                         if (billNumber != null) "Bill $billNumber sent to printer"
                         else "Bill generated"
@@ -197,9 +209,6 @@ fun AaharinApp(
                     }
                     cartItems = emptyList()
                 },
-                onCheckout = {
-                    navController.navigate("checkout")
-                },
             )
         }
         
@@ -207,6 +216,9 @@ fun AaharinApp(
             CheckoutScreen(
                 accessToken = currentUser?.accessToken ?: "",
                 orderId = runningOrderId,
+                // Was left at its default 0, so the settle call never told the server
+                // which table it was closing.
+                tableId = selectedTable?.id ?: 0,
                 tableName = selectedTable?.name ?: "Unknown",
                 totalAmount = runningOrderTotal,
                 onBack = { navController.popBackStack() },
